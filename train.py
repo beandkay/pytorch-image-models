@@ -89,6 +89,12 @@ parser.add_argument('--drop-path', type=float, default=None, metavar='PCT',
                     help='Drop path rate (default: None)')
 parser.add_argument('--drop-block', type=float, default=None, metavar='PCT',
                     help='Drop block rate (default: None)')
+parser.add_argument('--checkerboard_rate', type=float, default=0.0, metavar='PCT',
+                    help='Checkerboard rate (default: 0.0)')
+parser.add_argument('--checkerboard_size', type=float, default=1, metavar='PCT',
+                    help='Checkerboard size (default: 1)')
+parser.add_argument('--checkerboard_shape', type=str, default='square', metavar='PCT',
+                    help='Checkerboard shape (square, rectangle) (default: square)')
 parser.add_argument('--jsd', action='store_true', default=False,
                     help='Enable Jensen-Shannon Divergence + CE loss. Use with `--aug-splits`.')
 # Optimizer parameters

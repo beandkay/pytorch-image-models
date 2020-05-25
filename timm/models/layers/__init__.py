@@ -20,3 +20,4 @@ from .anti_aliasing import AntiAliasDownsampleLayer
 from .space_to_depth import SpaceToDepthModule
 from .blur_pool import BlurPool2d
 from .weight_init import trunc_normal_
+from .checkerboard import CheckerBoard2D, CheckerBoardScheduler

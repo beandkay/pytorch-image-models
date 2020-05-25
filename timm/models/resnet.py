@@ -12,7 +12,7 @@ import torch.nn.functional as F
 
 from .registry import register_model
 from .helpers import load_pretrained, adapt_model_from_file
-from .layers import SelectAdaptivePool2d, DropBlock2d, DropPath, AvgPool2dSame, create_attn, BlurPool2d
+from .layers import SelectAdaptivePool2d, DropBlock2d, DropPath, AvgPool2dSame, create_attn, BlurPool2d, CheckerBoardScheduler, CheckerBoard2D
 from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 
 __all__ = ['ResNet', 'BasicBlock', 'Bottleneck']  # model_registry will add each entrypoint fn to this
@@ -122,7 +122,8 @@ default_cfgs = {
         interpolation='bicubic'),
     'resnetblur50': _cfg(
         url='https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/resnetblur50-84f4748f.pth',
-        interpolation='bicubic')
+        interpolation='bicubic'),
+    'resnetcb50': _cfg(),
 }
 
 
@@ -136,7 +137,7 @@ class BasicBlock(nn.Module):
 
     def __init__(self, inplanes, planes, stride=1, downsample=None, cardinality=1, base_width=64,
                  reduce_first=1, dilation=1, first_dilation=None, act_layer=nn.ReLU, norm_layer=nn.BatchNorm2d,
-                 attn_layer=None, aa_layer=None, drop_block=None, drop_path=None):
+                 attn_layer=None, aa_layer=None, drop_block=None, drop_path=None, checkerboard=None):
         super(BasicBlock, self).__init__()
 
         assert cardinality == 1, 'BasicBlock only supports cardinality of 1'
@@ -165,6 +166,7 @@ class BasicBlock(nn.Module):
         self.dilation = dilation
         self.drop_block = drop_block
         self.drop_path = drop_path
+        self.checkerboard = checkerboard
 
     def zero_init_last_bn(self):
         nn.init.zeros_(self.bn2.weight)
@@ -176,6 +178,10 @@ class BasicBlock(nn.Module):
         x = self.bn1(x)
         if self.drop_block is not None:
             x = self.drop_block(x)
+            
+        if self.checkerboard is not None:
+            x = self.checkerboard(x)
+            
         x = self.act1(x)
         if self.aa is not None:
             x = self.aa(x)
@@ -184,7 +190,7 @@ class BasicBlock(nn.Module):
         x = self.bn2(x)
         if self.drop_block is not None:
             x = self.drop_block(x)
-
+            
         if self.se is not None:
             x = self.se(x)
 
@@ -205,7 +211,7 @@ class Bottleneck(nn.Module):
 
     def __init__(self, inplanes, planes, stride=1, downsample=None, cardinality=1, base_width=64,
                  reduce_first=1, dilation=1, first_dilation=None, act_layer=nn.ReLU, norm_layer=nn.BatchNorm2d,
-                 attn_layer=None, aa_layer=None, drop_block=None, drop_path=None):
+                 attn_layer=None, aa_layer=None, drop_block=None, drop_path=None, checkerboard=None):
         super(Bottleneck, self).__init__()
 
         width = int(math.floor(planes * (base_width / 64)) * cardinality)
@@ -236,6 +242,7 @@ class Bottleneck(nn.Module):
         self.dilation = dilation
         self.drop_block = drop_block
         self.drop_path = drop_path
+        self.checkerboard = checkerboard
 
     def zero_init_last_bn(self):
         nn.init.zeros_(self.bn3.weight)
@@ -253,6 +260,10 @@ class Bottleneck(nn.Module):
         x = self.bn2(x)
         if self.drop_block is not None:
             x = self.drop_block(x)
+            
+        if self.checkerboard is not None:
+            x = self.checkerboard(x)
+            
         x = self.act2(x)
         if self.aa is not None:
             x = self.aa(x)
@@ -261,7 +272,7 @@ class Bottleneck(nn.Module):
         x = self.bn3(x)
         if self.drop_block is not None:
             x = self.drop_block(x)
-
+            
         if self.se is not None:
             x = self.se(x)
 
@@ -381,7 +392,8 @@ class ResNet(nn.Module):
                  cardinality=1, base_width=64, stem_width=64, stem_type='',
                  block_reduce_first=1, down_kernel_size=1, avg_down=False, output_stride=32,
                  act_layer=nn.ReLU, norm_layer=nn.BatchNorm2d, aa_layer=None, drop_rate=0.0, drop_path_rate=0.,
-                 drop_block_rate=0., global_pool='avg', zero_init_last_bn=True, block_args=None):
+                 drop_block_rate=0., global_pool='avg', zero_init_last_bn=True,
+                  checkerboard_rate=0., checkerboard_size=1, checkerboard_shape='square', block_args=None):
         block_args = block_args or dict()
         self.num_classes = num_classes
         deep_stem = 'deep' in stem_type
@@ -390,6 +402,11 @@ class ResNet(nn.Module):
         self.base_width = base_width
         self.drop_rate = drop_rate
         self.expansion = block.expansion
+        
+        self.checkerboard_rate = checkerboard_rate
+        self.checkerboard_size = checkerboard_size
+        self.checkerboard_shape = checkerboard_shape
+        
         super(ResNet, self).__init__()
 
         # Stem
@@ -419,6 +436,8 @@ class ResNet(nn.Module):
         else:
             self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
+        cb = CheckerBoard2D(self.checkerboard_rate, self.checkerboard_size, self.checkerboard_shape) if checkerboard_rate else None
+        
         # Feature Blocks
         dp = DropPath(drop_path_rate) if drop_path_rate else None
         db_3 = DropBlock2d(drop_block_rate, 7, 0.25) if drop_block_rate else None
@@ -438,8 +457,8 @@ class ResNet(nn.Module):
             avg_down=avg_down, down_kernel_size=down_kernel_size, drop_path=dp, **block_args)
         self.layer1 = self._make_layer(block, *layer_args[0], **layer_kwargs)
         self.layer2 = self._make_layer(block, *layer_args[1], **layer_kwargs)
-        self.layer3 = self._make_layer(block, drop_block=db_3, *layer_args[2], **layer_kwargs)
-        self.layer4 = self._make_layer(block, drop_block=db_4, *layer_args[3], **layer_kwargs)
+        self.layer3 = self._make_layer(block, drop_block=db_3, checkerboard=cb, *layer_args[2], **layer_kwargs)
+        self.layer4 = self._make_layer(block, drop_block=db_4, checkerboard=cb, *layer_args[3], **layer_kwargs)
 
         # Head (Pooling and Classifier)
         self.global_pool = SelectAdaptivePool2d(pool_type=global_pool)
@@ -1160,6 +1179,18 @@ def resnetblur50(pretrained=False, num_classes=1000, in_chans=3, **kwargs):
     default_cfg = default_cfgs['resnetblur50']
     model = ResNet(
         Bottleneck, [3, 4, 6, 3], num_classes=num_classes, in_chans=in_chans, aa_layer=BlurPool2d, **kwargs)
+    model.default_cfg = default_cfg
+    if pretrained:
+        load_pretrained(model, default_cfg, num_classes, in_chans)
+    return model
+
+@register_model
+def resnetcb50(pretrained=False, num_classes=1000, in_chans=3, **kwargs):
+    """Constructs a ResNet-50 model with checkerboard dropout
+    """
+    default_cfg = default_cfgs['resnetcb50']
+    model = ResNet(Bottleneck, [3, 4, 6, 3], num_classes=num_classes, in_chans=in_chans,
+                    checkerboard_rate=0.1, checkerboard_size=1, checkerboard_shape='square', **kwargs)
     model.default_cfg = default_cfg
     if pretrained:
         load_pretrained(model, default_cfg, num_classes, in_chans)
