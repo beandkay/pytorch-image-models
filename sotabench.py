@@ -134,8 +134,6 @@ model_list = [
            model_desc='A ResNet101d with ECA attn'),
 
     _entry('resnetblur50', 'ResNet-Blur-50', '1904.11486'),
-    
-    _entry('resnetcb50', 'ResNet-Checkerboard-50', ''),
 
     _entry('tf_efficientnet_b0', 'EfficientNet-B0 (AutoAugment)', '1905.11946',
            model_desc='Ported from official Google AI Tensorflow weights'),
